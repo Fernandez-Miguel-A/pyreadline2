@@ -8,7 +8,7 @@
 from __future__ import print_function, unicode_literals, absolute_import
 import re, operator, string, sys, os
 
-from pyreadline.unicode_helper import ensure_unicode, ensure_str
+from pyreadline.unicode_helper import ensure_unicode, ensure_str, pyreadline_codepage
 if "pyreadline" in sys.modules:
     pyreadline = sys.modules["pyreadline"]
 else:
@@ -79,7 +79,7 @@ class LineHistory(object):
         if filename is None:
             filename = self.history_filename
         try:
-            for line in open(filename, 'r'):
+            for line in open(filename, 'r', encoding=pyreadline_codepage):
                 self.add_history(lineobj.ReadLineTextBuffer(ensure_unicode(line.rstrip())))
         except IOError:
             self.history = []
@@ -89,10 +89,10 @@ class LineHistory(object):
         '''Save a readline history file.'''
         if filename is None:
             filename = self.history_filename
-        fp = open(filename, 'wb')
+        fp = open(filename, 'wb')# pyreadline_codepage
         for line in self.history[-self.history_length:]:
             fp.write(ensure_str(line.get_line_text()))
-            fp.write('\n'.encode('ascii'))
+            fp.write('\n'.encode(pyreadline_codepage))
         fp.close()
 
 

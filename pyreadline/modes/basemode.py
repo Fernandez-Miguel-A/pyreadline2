@@ -247,6 +247,25 @@ class BaseMode(object):
             self.console.write('\n')
         if in_ironpython:
             self.prompt=sys.ps1
+
+        try:
+            IMP = sys._mercurial[0]
+        except AttributeError:
+            IMP = sys._git[0]
+
+        #
+        adding_emptyLine = "\n"
+        if type(self.prompt) != str:
+            adding_emptyLine = adding_emptyLine.encode()
+
+        self.console.write(adding_emptyLine)
+        #
+
+        if IMP.lower() == "pypy":
+            self.console.write(self.prompt)# Antes escribía el prompt dos veces en pypy2/3, tube que
+            # quitar una llamada dentro de _print_prompt() y añadir self.console.write(self.prompt).
+            # Además corregí el bug de el prompt intercalado ".... ", ">>>> "
+
         self._print_prompt()
 
 
@@ -550,13 +569,21 @@ class BaseMode(object):
         self._print_prompt()
         self.finalize()
 
+anyGlobVar = True
+
+def sameStr_s(a, b, stop=-1, sensitive =anyGlobVar):
+    if not sensitive:
+        return a[:stop].lower() == b[:stop].lower()
+    else:
+        return a[:stop] == b[:stop]
+
 def commonprefix(m):
     "Given a list of pathnames, returns the longest common leading component"
     if not m: return ''
     prefix = m[0]
     for item in m:
         for i in range(len(prefix)):
-            if prefix[:i+1].lower() != item[:i+1].lower():
+            if not sameStr_s(prefix, item, i+1):
                 prefix = prefix[:i]
                 if i == 0: return ''
                 break

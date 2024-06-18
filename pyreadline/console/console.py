@@ -216,20 +216,47 @@ class Console(object):
         log('initial attr=%x' % self.attr)
         self.softspace = 0 # this is for using it as a file-like object
         self.serial = 0
+#
+        try:
+            IMP = sys._mercurial[0]
+        except AttributeError:
+            IMP = sys._git[0]
 
-        self.pythondll = ctypes.pythonapi
-        self.inputHookPtr = \
-            c_void_p.from_address(addressof(self.pythondll.PyOS_InputHook)).value
+        # print('\n\n\npython%s%s' % (sys.version[0], sys.version[2]), "\n\n", IMP)
+        if IMP.lower() == "pypy":
+            if sys.winver > "3":
+                nameLib = "libpypy3-c"
+            else:
+                nameLib = "libpypy-c"
 
-        if sys.version_info[:2] > (3, 4): 
+            self.pythondll = CDLL(nameLib)
+        else:
+            self.pythondll = ctypes.pythonapi
+
+        if IMP.lower() == "pypy":
+            self.inputHookPtr = None
+            # print("Falta resolver la vinculación con 'PyOS_InputHook'")
+            # setattr(Console, 'PyMem_Malloc', self.pythondll.PyPyMem_Malloc)
+
+            # print("PYPY it´s runing!!!\n\n\n")
+            if sys.winver > "3":
+                self.pythondll.PyPyMem_Malloc.restype = c_size_t
+                self.pythondll.PyPyMem_Malloc.argtypes = [c_size_t]
+        elif sys.version_info[:2] > (3, 4):                         # Common Python3.4++
             self.pythondll.PyMem_RawMalloc.restype = c_size_t
             self.pythondll.PyMem_Malloc.argtypes = [c_size_t]
+
+            self.inputHookPtr = \
+                c_void_p.from_address(addressof(self.pythondll.PyOS_InputHook)).value
             setattr(Console, 'PyMem_Malloc', self.pythondll.PyMem_RawMalloc)
-        else:
+        else:                                                       # Common Python3.4--
             self.pythondll.PyMem_Malloc.restype = c_size_t
             self.pythondll.PyMem_Malloc.argtypes = [c_size_t]
-            setattr(Console, 'PyMem_Malloc', self.pythondll.PyMem_Malloc)
 
+            self.inputHookPtr = \
+                c_void_p.from_address(addressof(self.pythondll.PyOS_InputHook)).value
+            setattr(Console, 'PyMem_Malloc', self.pythondll.PyMem_Malloc)
+#
 
 
         
@@ -303,6 +330,10 @@ class Console(object):
     # than a normal character.
     motion_char_re = re.compile('([\n\r\t\010\007])')
 
+# La librería no contempla el estiramiento horizontal
+# bug: si deslizo la ventana hasta levantar el cursor y luego lo comprimo un poco a lo ancho hasta que el texto se modifique,
+# hace que saltee varias lineas y escriba el cursor mucho más abajo
+
     def write_scrolling(self, text, attr=None):
         '''write text at current cursor position while watching for scrolling.
 
@@ -360,6 +391,21 @@ class Console(object):
                     y = h - 1
         return scroll
 
+
+    def strToChar_p(self, txt):
+        try:
+            IMP = sys._mercurial[0]
+        except AttributeError:
+            IMP = sys._git[0]
+
+        if IMP.lower() == "pypy":
+            string = create_unicode_buffer(len(txt))
+            string.value = txt
+            return string
+        else:
+            return txt
+
+
     def write_color(self, text, attr=None):
         text = ensure_unicode(text)
         n, res= self.ansiwriter.write_color(text, attr)
@@ -369,7 +415,7 @@ class Console(object):
             log("console.chunk:%s"%(chunk))
             self.SetConsoleTextAttribute(self.hout, attr.winattr)
             for short_chunk in split_block(chunk):
-                self.WriteConsoleW(self.hout, short_chunk, 
+                self.WriteConsoleW(self.hout, self.strToChar_p(short_chunk), 
                                    len(short_chunk), byref(junk), None)
         return n
 
@@ -505,8 +551,11 @@ class Console(object):
 
     def get(self):
         '''Get next event from queue.'''
-        inputHookFunc = c_void_p.from_address(self.inputHookPtr).value
-
+        if self.inputHookPtr:
+            inputHookFunc = c_void_p.from_address(self.inputHookPtr).value
+        else:
+            inputHookFunc = None
+#
         Cevent = INPUT_RECORD()
         count = DWORD(0)
         while 1:
@@ -758,50 +807,111 @@ def getconsole(buffer=1):
 # the type for our C-callable wrapper
 HOOKFUNC23 = CFUNCTYPE(c_char_p, c_void_p, c_void_p, c_char_p)
 
+# De prueba:
+
+test_HOOKFUNC = CFUNCTYPE(c_char_p, c_void_p, c_void_p, c_char_p)
+
+
+def my_hook_wrapper(stdin, stdout, prompt):
+    '''Para probar como hace las llamadas a las funciones'''
+    print("\n\n\n stdin: %s,\n stdout: %s,\n prompt: %s"%(stdin, stdout, prompt))
+    print(type(stdin), type(stdout), type(prompt), prompt)
+
+# Fin de prueba
+
 readline_hook = None # the python hook goes here
 readline_ref = None  # reference to the c-callable to keep it alive
 
 def hook_wrapper_23(stdin, stdout, prompt):
     '''Wrap a Python readline so it behaves like GNU readline.'''
+    # print(type(stdin), type(stdout), type(prompt), prompt)
     try:
+        try:
+            IMP = sys._mercurial[0]
+        except AttributeError:
+            IMP = sys._git[0]
+
         # call the Python hook
-        res = ensure_str(readline_hook(prompt))
-        # make sure it returned the right sort of thing
-        if res and not isinstance(res, bytes):
-            raise TypeError('readline must return a string.')
+        res = readline_hook(prompt)
+
+        if IMP.lower() == "pypy" and sys.version > "3.0": # hay un bug cuando tipea sys.´´ "enter"  aparece  sys.|--
+            # make sure it returned the right sort of thing
+            if res and isinstance(res, bytes):
+                raise TypeError('readline must return a string.')
+        else:
+            res = ensure_str(res)                               # python2/3 o pypy2 only
+            # make sure it returned the right sort of thing
+            if res and not isinstance(res, bytes):
+                raise TypeError('readline must return a string.')
+        # print("hook_wrapper_23:_:", type(res))
     except KeyboardInterrupt:
         # GNU readline returns 0 on keyboard interrupt
         return 0
     except EOFError:
         # It returns an empty string on EOF
-        res = ensure_str('')
+        if IMP.lower() != "pypy" and sys.version > "3.0":
+            res = b''
+        else:
+            res = ''
     except:
         print('Readline internal error', file=sys.stderr)
         traceback.print_exc()
-        res = ensure_str('\n')
-    # we have to make a copy because the caller expects to free the result
-    n = len(res)
-    p = Console.PyMem_Malloc(n + 1)
-    _strncpy(cast(p, c_char_p), res, n + 1)
-    return p
+        if IMP.lower() != "pypy" and sys.version > "3.0":
+            res = b'\n'
+        else:
+            res = '\n'
+
+    if IMP.lower() == "pypy":
+#        print("\n\ntp: %s, v: %s"%(type(res), res))
+        return res
+    else:
+        #we have to make a copy because the caller expects to free the result
+        n = len(res)
+        p = Console.PyMem_Malloc(n + 1)
+#        print("\n\ntp: %s, v: %s\ntp: %s, v: %s\ntp: %s, v: %s"%(type(p), p, type(c_char_p), c_char_p, type(res), res))
+        _strncpy(cast(p, c_char_p), res, n + 1)
+        return p
 
 
 def install_readline(hook):
     '''Set up things for the interpreter to call 
     our function like GNU readline.'''
+
     global readline_hook, readline_ref
+    import sys
     # save the hook so the wrapper can call it
     readline_hook = hook
-    # get the address of PyOS_ReadlineFunctionPointer so we can update it
-    PyOS_RFP = c_void_p.from_address(Console.GetProcAddress(sys.dllhandle,
-                           "PyOS_ReadlineFunctionPointer".encode('ascii')))
-    # save a reference to the generated C-callable so it doesn't go away
-    readline_ref = HOOKFUNC23(hook_wrapper_23)
-    # get the address of the function
-    func_start = c_void_p.from_address(addressof(readline_ref)).value
-    # write the function address into PyOS_ReadlineFunctionPointer
-    PyOS_RFP.value = func_start
 
+    try:
+        IMP = sys._mercurial[0]
+    except AttributeError:
+        IMP = sys._git[0]
+
+    if IMP.lower() == "pypy":
+        #return
+        if sys.winver > "3":
+            cin = sys.stdin
+            cin.readline = lambda limit=-1: hook_wrapper_23(None, None, ">>>> ") #bug. Si habro un dic, '{', y luego doy
+            # enter, enter, enter; aparece ">>>>" intercalado, pero solo debería aparecer "...." . RESUELTO
+        else:
+            import io, sys
+            cin = io.open(0)
+            cin.readline = lambda limit=-1: hook_wrapper_23(None, None, ">>>> ") #bug. Si habro un dic, '{', y luego doy
+            # enter, enter, enter; aparece ">>>>" intercalado, pero solo debería aparecer "...." . RESUELTO
+            sys.stdin = cin
+    else:
+        # get the address of PyOS_ReadlineFunctionPointer so we can update it
+        PyOS_RFP = c_void_p.from_address(Console.GetProcAddress(sys.dllhandle,
+                               "PyOS_ReadlineFunctionPointer".encode('ascii')))
+
+        # save a reference to the generated C-callable so it doesn't go away
+        readline_ref = HOOKFUNC23(hook_wrapper_23)
+
+        # get the address of the function
+        func_start = c_void_p.from_address(addressof(readline_ref)).value
+
+        # write the function address into PyOS_ReadlineFunctionPointer
+        PyOS_RFP.value = func_start
 
 if __name__ == '__main__':
     import time, sys
