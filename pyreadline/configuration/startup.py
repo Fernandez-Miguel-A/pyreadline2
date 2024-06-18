@@ -21,6 +21,8 @@ else:
     completer_obj = rlcompleter.Completer()
     def nop(val, word):
         return word
+
+        
     completer_obj._callable_postfix = nop
     readline.set_completer(completer_obj.complete)
 
