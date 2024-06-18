@@ -5,7 +5,11 @@ if sys.version_info[0] >= 3:
     import collections
     PY3 = True
     def callable(x):
-        return isinstance(x, collections.Callable)
+        try:
+            call = collections.Callable
+        except Exception as e:## Deprecated Warning 3.10 >= X
+            call = collections.abc.Callable
+        return isinstance(x, call)
     
     def execfile(fname, glob, loc=None):
         loc = loc if (loc is not None) else glob
